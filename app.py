@@ -19,7 +19,7 @@ for event in events:
 
         # Gmail SMTP
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login("your_email@gmail.com", "your_app_password")
+            server.login("malviaharish@gmail.com", "Krishnaram1$")
             server.send_message(msg)
 
         print(f"Reminder sent for {event['name']}")
