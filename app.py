@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import smtplib
 from email.mime.text import MIMEText
-from twilio.rest import Client
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -17,10 +16,6 @@ EMAIL_ADDRESS = "your_email@gmail.com"
 EMAIL_PASSWORD = "your_app_password"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-
-TWILIO_SID = "ACxxxxxxxxxxxxxxxx"
-TWILIO_AUTH = "xxxxxxxxxxxxxxxx"
-TWILIO_WHATSAPP_FROM = "whatsapp:+14155238886"
 
 DATA_FILE = "events.csv"
 TIMEZONE = "Asia/Kolkata"
@@ -38,16 +33,6 @@ def send_email(to_email, subject, message):
         server.starttls()
         server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
         server.send_message(msg)
-
-# ===================== WHATSAPP ===================== #
-
-def send_whatsapp(to_number, message):
-    client = Client(TWILIO_SID, TWILIO_AUTH)
-    client.messages.create(
-        body=message,
-        from_=TWILIO_WHATSAPP_FROM,
-        to=f"whatsapp:{to_number}"
-    )
 
 # ===================== GOOGLE CALENDAR ===================== #
 
@@ -68,28 +53,21 @@ def get_calendar_service():
 
 def add_to_google_calendar(title, start_dt, end_dt):
     service = get_calendar_service()
-
     event = {
         'summary': title,
-        'start': {
-            'dateTime': start_dt.isoformat(),
-            'timeZone': TIMEZONE,
-        },
-        'end': {
-            'dateTime': end_dt.isoformat(),
-            'timeZone': TIMEZONE,
-        },
+        'start': {'dateTime': start_dt.isoformat(), 'timeZone': TIMEZONE},
+        'end': {'dateTime': end_dt.isoformat(), 'timeZone': TIMEZONE},
     }
-
     service.events().insert(calendarId='primary', body=event).execute()
 
 # ===================== DATA ===================== #
 
 def load_events():
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE, parse_dates=["event_datetime"])
+        return pd.read_csv(DATA_FILE, parse_dates=["event_datetime", "reminder_datetime"])
     return pd.DataFrame(columns=[
-        "event", "event_datetime", "email", "whatsapp", "notified"
+        "event", "event_datetime", "reminder_datetime",
+        "email", "add_to_calendar", "notified"
     ])
 
 def save_events(df):
@@ -98,13 +76,14 @@ def save_events(df):
 # ===================== NOTIFICATION ===================== #
 
 def notify_event(index, row):
-    message = f"⏰ Reminder:\n{row['event']}\n🕒 {row['event_datetime']}"
+    message = (
+        f"⏰ Reminder\n\n"
+        f"Event: {row['event']}\n"
+        f"Event Time: {row['event_datetime']}"
+    )
 
     if pd.notna(row["email"]):
         send_email(row["email"], "Event Reminder", message)
-
-    if pd.notna(row["whatsapp"]):
-        send_whatsapp(row["whatsapp"], message)
 
     df = load_events()
     df.at[index, "notified"] = True
@@ -118,11 +97,11 @@ scheduler.start()
 def schedule_events():
     df = load_events()
     for i, row in df.iterrows():
-        if not row["notified"] and row["event_datetime"] > datetime.now():
+        if not row["notified"] and row["reminder_datetime"] > datetime.now():
             scheduler.add_job(
                 notify_event,
                 'date',
-                run_date=row["event_datetime"],
+                run_date=row["reminder_datetime"],
                 args=[i, row],
                 replace_existing=True
             )
@@ -131,39 +110,98 @@ schedule_events()
 
 # ===================== STREAMLIT UI ===================== #
 
-st.title("📅 Smart Event Reminder App")
+st.title("📅 Smart Event Reminder App (Multiple Reminders)")
 
-st.subheader("➕ Add New Event")
+# ---------- MANUAL ENTRY ---------- #
+st.subheader("➕ Add Event Manually")
 
 event = st.text_input("Event Title")
-date = st.date_input("Event Date")
-time_input = st.time_input("Event Time")
-
+event_date = st.date_input("Event Date")
+event_time = st.time_input("Event Time")
 email = st.text_input("Email (optional)")
-whatsapp = st.text_input("WhatsApp Number (optional, +91XXXXXXXXXX)")
 add_calendar = st.checkbox("Add to Google Calendar")
 
-if st.button("Add Event"):
-    event_datetime = datetime.combine(date, time_input)
-    end_datetime = event_datetime + timedelta(minutes=30)
+st.markdown("### 🔔 Reminder Options")
+rem_1h = st.checkbox("1 hour before")
+rem_1d = st.checkbox("1 day before")
+custom_reminders = st.text_area(
+    "Custom reminder datetimes (comma separated, YYYY-MM-DD HH:MM)",
+    placeholder="2025-01-19 10:00, 2025-01-20 09:30"
+)
 
-    if add_calendar:
-        add_to_google_calendar(event, event_datetime, end_datetime)
+if st.button("Add Event"):
+    event_datetime = datetime.combine(event_date, event_time)
+    reminders = []
+
+    if rem_1h:
+        reminders.append(event_datetime - timedelta(hours=1))
+    if rem_1d:
+        reminders.append(event_datetime - timedelta(days=1))
+    if custom_reminders.strip():
+        for dt in custom_reminders.split(","):
+            reminders.append(pd.to_datetime(dt.strip()))
 
     df = load_events()
-    df = pd.concat([df, pd.DataFrame([{
-        "event": event,
-        "event_datetime": event_datetime,
-        "email": email if email else None,
-        "whatsapp": whatsapp if whatsapp else None,
-        "notified": False
-    }])], ignore_index=True)
+
+    for rdt in reminders:
+        df = pd.concat([df, pd.DataFrame([{
+            "event": event,
+            "event_datetime": event_datetime,
+            "reminder_datetime": rdt,
+            "email": email if email else None,
+            "add_to_calendar": "yes" if add_calendar else "no",
+            "notified": False
+        }])], ignore_index=True)
 
     save_events(df)
-    schedule_events()
-    st.success("✅ Event added successfully")
 
-st.subheader("📋 Upcoming Events")
+    if add_calendar:
+        add_to_google_calendar(event, event_datetime, event_datetime + timedelta(minutes=30))
+
+    schedule_events()
+    st.success("✅ Event with multiple reminders added")
+
+# ---------- EXCEL UPLOAD ---------- #
+st.subheader("📤 Upload Events via Excel")
+
+uploaded_file = st.file_uploader("Upload Excel (.xlsx)", type=["xlsx"])
+
+if uploaded_file:
+    excel_df = pd.read_excel(uploaded_file)
+
+    required = {"event", "event_datetime", "reminder_datetimes", "email", "add_to_calendar"}
+    if not required.issubset(excel_df.columns):
+        st.error("❌ Excel missing required columns")
+    else:
+        df = load_events()
+
+        for _, row in excel_df.iterrows():
+            event_dt = pd.to_datetime(row["event_datetime"])
+            reminders = str(row["reminder_datetimes"]).split(",")
+
+            for r in reminders:
+                df = pd.concat([df, pd.DataFrame([{
+                    "event": row["event"],
+                    "event_datetime": event_dt,
+                    "reminder_datetime": pd.to_datetime(r.strip()),
+                    "email": row["email"],
+                    "add_to_calendar": row["add_to_calendar"],
+                    "notified": False
+                }])], ignore_index=True)
+
+            if str(row["add_to_calendar"]).lower() == "yes":
+                add_to_google_calendar(
+                    row["event"],
+                    event_dt,
+                    event_dt + timedelta(minutes=30)
+                )
+
+        save_events(df)
+        schedule_events()
+        st.success("✅ Excel events with multiple reminders scheduled")
+
+# ---------- VIEW ---------- #
+st.subheader("📋 Scheduled Reminders")
 st.dataframe(load_events())
 
 st.info("⚠️ Keep the app running for reminders to work")
