@@ -12,9 +12,9 @@ from googleapiclient.discovery import build
 
 # ===================== CONFIG ===================== #
 
-EMAIL_ADDRESS = "your_email@gmail.com"
-EMAIL_PASSWORD = "your_app_password"
-SMTP_SERVER = "smtp.gmail.com"
+EMAIL_ADDRESS = "clinicalaffairs@zohomail.in"
+EMAIL_PASSWORD = "Healthium@"
+SMTP_SERVER = "smtp.zoho.in"
 SMTP_PORT = 587
 
 DATA_FILE = "events.csv"
