@@ -1,47 +1,72 @@
 import streamlit as st
 from datetime import datetime, timedelta
-from database import init_db, add_reminder, get_all
+import pickle
+import os
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
-init_db()
+# ===================== CONFIG ===================== #
+SCOPES = ['https://www.googleapis.com/auth/calendar']  # Full access to manage calendar
+CREDENTIALS_FILE = 'credentials.json'  # Downloaded from Google Cloud Console
 
-st.title("📅 Smart Event Reminder (SQLite + Worker)")
+# ===================== AUTHENTICATION ===================== #
+def get_calendar_service():
+    creds = None
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+    if not creds:
+        flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+        creds = flow.run_local_server(port=0)
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
+    service = build('calendar', 'v3', credentials=creds)
+    return service
 
-event = st.text_input("Event Title")
-event_date = st.date_input("Event Date")
-event_time = st.time_input("Event Time")
-email = st.text_input("Email")
+# ===================== ADD EVENT FUNCTION ===================== #
+def create_event(service, title, description, start_datetime, end_datetime):
+    event = {
+        'summary': title,
+        'description': description,
+        'start': {
+            'dateTime': start_datetime,
+            'timeZone': 'Asia/Kolkata',
+        },
+        'end': {
+            'dateTime': end_datetime,
+            'timeZone': 'Asia/Kolkata',
+        },
+    }
+    created_event = service.events().insert(calendarId='primary', body=event).execute()
+    return created_event.get('htmlLink')
 
-st.markdown("### 🔔 Reminder Options")
-one_hour = st.checkbox("1 hour before")
-one_day = st.checkbox("1 day before")
-custom = st.text_area(
-    "Custom reminder times (YYYY-MM-DD HH:MM, comma separated)"
-)
+# ===================== STREAMLIT UI ===================== #
+st.set_page_config(page_title="Google Calendar Reminder", page_icon="⏰", layout="centered")
+st.title("⏰ Google Calendar Reminder App")
+st.write("Add reminders/events to your Google Calendar directly from this app.")
 
-if st.button("Add Event"):
-    event_dt = datetime.combine(event_date, event_time)
+# Input fields
+title = st.text_input("Event Title", "")
+description = st.text_area("Event Description", "")
+date = st.date_input("Event Date", datetime.now().date())
+start_time = st.time_input("Start Time", datetime.now().time())
+end_time = st.time_input("End Time", (datetime.now() + timedelta(hours=1)).time())
 
-    reminders = []
-    if one_hour:
-        reminders.append(event_dt - timedelta(hours=1))
-    if one_day:
-        reminders.append(event_dt - timedelta(days=1))
-    if custom.strip():
-        reminders.extend([
-            datetime.strptime(x.strip(), "%Y-%m-%d %H:%M")
-            for x in custom.split(",")
-        ])
+add_event = st.button("➕ Add to Google Calendar")
 
-    for r in reminders:
-        add_reminder(
-            event,
-            event_dt.strftime("%Y-%m-%d %H:%M:%S"),
-            r.strftime("%Y-%m-%d %H:%M:%S"),
-            email
-        )
+# Run when button clicked
+if add_event:
+    if not title:
+        st.warning("Please enter an event title.")
+    else:
+        service = get_calendar_service()
+        start_dt = datetime.combine(date, start_time).isoformat()
+        end_dt = datetime.combine(date, end_time).isoformat()
+        try:
+            event_link = create_event(service, title, description, start_dt, end_dt)
+            st.success("✅ Event added successfully!")
+            st.markdown(f"[Open in Google Calendar]({event_link})")
+        except Exception as e:
+            st.error(f"Error adding event: {e}")
 
-    st.success("✅ Event added with reminders")
-
-st.subheader("📋 Scheduled Reminders")
-data = get_all()
-st.dataframe(data, use_container_width=True)
+st.info("ℹ️ First time you run this app, a browser window will open for Google login and authorization.")
