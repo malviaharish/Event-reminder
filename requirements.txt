@@ -10,3 +10,4 @@ streamlit
 apscheduler
 pandas
 ics
+Calendar
